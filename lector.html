@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lector EPUB 3.0</title>
+    
+    <!-- Librerías para lectura e interactividad de EPUB 3.0 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.5/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
+
+    <style>
+        :root {
+            --bg-body: #121214;
+            --bg-nav: #1a1a1e;
+            --bg-sidebar: #202024;
+            --text-main: #f0f0f5;
+            --border-color: #2e2e34;
+            --btn-bg: #2b2b30;
+            --btn-hover: #3b3b42;
+            --btn-text: #e0e0e5;
+        }
+
+        [data-theme="light"] {
+            --bg-body: #f4f5f7;
+            --bg-nav: #ffffff;
+            --bg-sidebar: #ffffff;
+            --text-main: #18181b;
+            --border-color: #e4e4e7;
+            --btn-bg: #f0f0f3;
+            --btn-hover: #e2e2e8;
+            --btn-text: #18181b;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            overflow: hidden;
+            transition: background 0.3s ease, color 0.3s ease;
+        }
+
+        /* --- Barra Superior --- */
+        #controls {
+            padding: 10px 20px;
+            background-color: var(--bg-nav);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            z-index: 100;
+        }
+
+        .controls-group { display: flex; align-items: center; gap: 8px; }
+
+        .btn, select {
+            padding: 8px 14px;
+            background-color: var(--btn-bg);
+            border: 1px solid var(--border-color);
+            color: var(--btn-text);
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.88rem;
+            font-weight: 500;
+            transition: background 0.2s ease;
+        }
+
+        .btn:hover, select:hover { background-color: var(--btn-hover); }
+
+        /* --- Estructura Principal --- */
+        #main-container {
+            flex: 1;
+            display: flex;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Menú del Índice */
+        #sidebar {
+            width: 280px;
+            background-color: var(--bg-sidebar);
+            padding: 20px;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: absolute;
+            height: 100%;
+            z-index: 50;
+            transform: translateX(-100%);
+            box-shadow: 4px 0 20px rgba(0,0,0,0.15);
+            overflow-y: auto;
+            border-right: 1px solid var(--border-color);
+        }
+
+        #sidebar.open { transform: translateX(0); }
+
+        #sidebar h3 {
+            margin-top: 0;
+            font-size: 1.1rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+
+        #toc-list { list-style: none; padding: 0; margin: 0; }
+        #toc-list li {
+            padding: 10px 8px;
+            cursor: pointer;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            transition: background 0.2s ease;
+        }
+        #toc-list li:hover { background-color: var(--btn-bg); }
+
+        /* Visor del Libro */
+        #viewer-area {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 15px;
+            background-color: var(--bg-body);
+        }
+
+        #book-wrapper {
+            width: 100%;
+            height: 100%;
+            max-width: 900px;
+            background: #ffffff;
+            border-radius: 10px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+            overflow: hidden;
+            position: relative;
+        }
+
+        #viewer { width: 100%; height: 100%; }
+
+        /* Indicador de carga */
+        #loading-overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: var(--bg-body);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 0.95rem;
+            color: var(--btn-text);
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Navegación Superior -->
+    <nav id="controls">
+        <div class="controls-group">
+            <button id="toggle-sidebar" class="btn">☰ Índice</button>
+        </div>
+        
+        <div class="controls-group">
+            <button id="theme-toggle" class="btn">🌓 Modo</button>
+            <select id="view-mode">
+                <option value="auto">Vista: Auto</option>
+                <option value="single">1 Página</option>
+                <option value="none">2 Páginas</option>
+            </select>
+            <button id="prev" class="btn">❮ Anterior</button>
+            <button id="next" class="btn">Siguiente ❯</button>
+        </div>
+    </nav>
+    
+    <!-- Contenedor Principal -->
+    <div id="main-container">
+        <aside id="sidebar">
+            <h3>Contenido</h3>
+            <ul id="toc-list"></ul>
+        </aside>
+
+        <main id="viewer-area">
+            <div id="book-wrapper">
+                <div id="loading-overlay">Cargando libro...</div>
+                <div id="viewer"></div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        let book, rendition;
+        
+        // Carga automática del archivo predefinido al abrir la página
+        window.addEventListener('DOMContentLoaded', () => {
+            loadBook("little.epub");
+        });
+
+        // Alternar tema Claro/Oscuro
+        document.getElementById("theme-toggle").onclick = () => {
+            const html = document.documentElement;
+            const isDark = html.getAttribute('data-theme') === 'dark';
+            html.setAttribute('data-theme', isDark ? 'light' : 'dark');
+        };
+
+        // Mostrar / Ocultar el índice lateral
+        document.getElementById("toggle-sidebar").onclick = () => {
+            document.getElementById("sidebar").classList.toggle("open");
+        };
+
+        function loadBook(fileUrl) {
+            if (rendition) rendition.destroy();
+            document.getElementById("toc-list").innerHTML = "";
+            
+            book = ePub(fileUrl);
+            
+            // Configuración para soporte e interactividad EPUB 3.0
+            rendition = book.renderTo("viewer", {
+                width: "100%",
+                height: "100%",
+                flow: "paginated",
+                manager: "default",
+                allowScriptedContent: true, // Habilita scripts e interactividad interna
+                sandbox: "allow-same-origin allow-scripts allow-popups"
+            });
+
+            // Ajuste de estilos para evitar barras de desplazamiento innecesarias
+            rendition.hooks.content.register(function(contents) {
+                contents.addStylesheetRules({
+                    "body": { "margin": "0 !important", "padding": "0 !important" },
+                    "html": { "overflow": "hidden !important" }
+                });
+            });
+
+            rendition.display().then(() => {
+                // Oculta el mensaje de carga cuando la primera página se muestra
+                const loading = document.getElementById("loading-overlay");
+                if (loading) loading.style.display = "none";
+            });
+
+            // Construcción dinámica del índice de contenidos
+            book.loaded.navigation.then(nav => {
+                nav.toc.forEach(chapter => {
+                    const li = document.createElement("li");
+                    li.textContent = chapter.label;
+                    li.onclick = () => { 
+                        rendition.display(chapter.href); 
+                        document.getElementById("sidebar").classList.remove("open"); 
+                    };
+                    document.getElementById("toc-list").appendChild(li);
+                });
+            });
+        }
+
+        // Navegación con botones
+        document.getElementById("next").onclick = () => rendition?.next();
+        document.getElementById("prev").onclick = () => rendition?.prev();
+        
+        // Selección de vista (1 o 2 páginas)
+        document.getElementById("view-mode").onchange = () => {
+            rendition?.spread(document.getElementById("view-mode").value);
+            rendition?.resize();
+        };
+
+        // Navegación con flechas del teclado
+        document.addEventListener("keydown", (e) => {
+            if (e.key === "ArrowRight") rendition?.next();
+            if (e.key === "ArrowLeft") rendition?.prev();
+        });
+    </script>
+</body>
+</html>
