@@ -115,22 +115,24 @@
         }
         #toc-list li:hover { background-color: var(--btn-bg); }
 
+        /* Visor y centrado de bordes */
         #viewer-area {
             flex: 1;
             display: flex;
             justify-content: center;
             align-items: center;
-            padding: 15px;
+            padding: 20px;
             background-color: var(--bg-body);
             width: 100%;
             height: 100%;
+            overflow: hidden;
         }
 
         #book-wrapper {
             width: 100%;
             height: 100%;
             max-width: 900px;
-            max-height: 90vh;
+            max-height: 85vh;
             background: transparent !important;
             border-radius: 12px;
             overflow: hidden;
@@ -175,19 +177,19 @@
 
     <nav id="controls">
         <div class="controls-group">
-            <button id="toggle-sidebar" class="btn">☰ Índice</button>
-            <button id="play-audio" class="btn btn-audio">▶ Reproducir Narración</button>
+            <button id="toggle-sidebar" class="btn" data-speech="Índice de contenido">☰ Índice</button>
+            <button id="play-audio" class="btn btn-audio" data-speech="Reproducir narración de la página">▶ Reproducir Narración</button>
         </div>
         
         <div class="controls-group">
-            <button id="theme-toggle" class="btn">🌓 Modo</button>
-            <select id="view-mode">
+            <button id="theme-toggle" class="btn" data-speech="Cambiar modo claro u oscuro">🌓 Modo</button>
+            <select id="view-mode" data-speech="Modo de vista de páginas">
                 <option value="auto">Vista: Auto</option>
                 <option value="single">1 Página</option>
                 <option value="none">2 Páginas</option>
             </select>
-            <button id="prev" class="btn">❮ Anterior</button>
-            <button id="next" class="btn">Siguiente ❯</button>
+            <button id="prev" class="btn" data-speech="Página anterior">❮ Anterior</button>
+            <button id="next" class="btn" data-speech="Página siguiente">Siguiente ❯</button>
         </div>
     </nav>
     
@@ -205,17 +207,38 @@
         </main>
     </div>
 
-    <!-- Elemento de Audio Reproductor NATIVO -->
     <audio id="smil-audio-player" style="display:none;"></audio>
 
     <script>
         let book, rendition;
         const audioPlayer = document.getElementById("smil-audio-player");
-        let smilAudioMap = {}; // Diccionario para guardar [página XHTML] -> [Ruta Audio]
+        let smilAudioMap = {};
 
         window.addEventListener('DOMContentLoaded', () => {
             loadBook("little.epub");
+            enableHoverTTS(); // Activar síntesis de voz en los botones superiores
         });
+
+        // FUNCIONALIDAD ACCESIBILIDAD: Lectura en hover de botones superiores
+        function enableHoverTTS() {
+            if (!('speechSynthesis' in window)) return;
+
+            const elementsToRead = document.querySelectorAll('#controls .btn, #controls select');
+
+            elementsToRead.forEach(el => {
+                el.addEventListener('mouseenter', () => {
+                    window.speechSynthesis.cancel(); // Cancelar lecturas previas
+                    
+                    let textToRead = el.getAttribute('data-speech') || el.innerText || el.options?.[el.selectedIndex]?.text;
+                    if (textToRead) {
+                        const utterance = new SpeechSynthesisUtterance(textToRead);
+                        utterance.lang = 'es-ES';
+                        utterance.rate = 1.0;
+                        window.speechSynthesis.speak(utterance);
+                    }
+                });
+            });
+        }
 
         document.getElementById("theme-toggle").onclick = () => {
             const html = document.documentElement;
@@ -242,24 +265,34 @@
                 sandbox: "allow-same-origin allow-scripts allow-popups allow-forms allow-downloads"
             });
 
-            // Ajuste estético de centrado
+            // CENTRADO MÁXIMO Y RESPETO DE BORDES INTERNOS DEL EPUB
             rendition.hooks.content.register(function(contents) {
                 contents.addStylesheetRules({
-                    "html, body": { 
+                    "html": { 
                         "height": "100% !important", 
                         "width": "100% !important",
                         "margin": "0 !important", 
+                        "padding": "0 !important",
+                        "overflow": "hidden !important",
+                        "background": "transparent !important"
+                    },
+                    "body": { 
+                        "height": "100% !important", 
+                        "width": "100% !important",
+                        "margin": "0 auto !important", 
                         "padding": "0 !important",
                         "background": "transparent !important",
                         "display": "flex !important",
                         "justify-content": "center !important",
                         "align-items": "center !important",
-                        "overflow": "hidden !important"
+                        "overflow": "hidden !important",
+                        "box-sizing": "border-box !important"
                     },
-                    "img, svg": {
+                    "img, svg, video, div": {
                         "max-width": "100% !important",
                         "max-height": "100% !important",
-                        "object-fit": "contain !important"
+                        "object-fit": "contain !important",
+                        "box-sizing": "border-box !important"
                     }
                 });
             });
@@ -270,12 +303,10 @@
                 rendition.resize();
             });
 
-            // Mapeo exhaustivo de archivos SMIL y manifiesto
             book.ready.then(() => {
                 indexSmilFiles();
             });
 
-            // CONTROL DE REPRODUCCIÓN AL HACER CLICK EN EL BOTÓN
             document.getElementById("play-audio").onclick = () => {
                 const btn = document.getElementById("play-audio");
 
@@ -288,14 +319,12 @@
                 playCurrentPageNarrative();
             };
 
-            // Al cambiar de página
             rendition.on("relocated", () => {
                 audioPlayer.pause();
                 audioPlayer.currentTime = 0;
                 document.getElementById("play-audio").textContent = "▶ Reproducir Narración";
             });
 
-            // Construcción del Índice
             book.loaded.navigation.then(nav => {
                 nav.toc.forEach(chapter => {
                     const li = document.createElement("li");
@@ -309,7 +338,6 @@
             });
         }
 
-        // FUNCIÓN CLAVE: INDEXAR LOS ARCHIVOS .SMIL
         async function indexSmilFiles() {
             smilAudioMap = {};
             const manifest = book.packaging.manifest;
@@ -317,7 +345,6 @@
             for (let key in manifest) {
                 const item = manifest[key];
                 
-                // Si el item del manifiesto es de tipo SMIL o termina en .smil
                 if (item.type === "application/smil+xml" || (item.href && item.href.endsWith(".smil"))) {
                     try {
                         const url = await book.archive.url(item.href);
@@ -327,51 +354,39 @@
                         const parser = new DOMParser();
                         const xmlDoc = parser.parseFromString(xmlText, "application/xml");
                         
-                        // Buscar nodos de texto y de audio
                         const textNodes = xmlDoc.querySelectorAll("text");
                         const audioNodes = xmlDoc.querySelectorAll("audio");
 
                         if (textNodes.length > 0 && audioNodes.length > 0) {
-                            // Extraer ruta de la página XHTML asociada
                             let xhtmlSrc = textNodes[0].getAttribute("src").split("#")[0];
-                            // Extraer ruta del archivo de audio asociado
                             let audioSrc = audioNodes[0].getAttribute("src");
 
-                            // Normalizar rutas relativas
                             const smilDir = item.href.substring(0, item.href.lastIndexOf("/") + 1);
                             
                             const fullXhtml = resolvePath(smilDir, xhtmlSrc);
                             const fullAudio = resolvePath(smilDir, audioSrc);
 
-                            // Guardar en nuestro mapa
                             smilAudioMap[getFilename(fullXhtml)] = fullAudio;
                         }
                     } catch (e) {
-                        console.error("Error al procesar archivo SMIL:", item.href, e);
+                        console.error("Error al procesar SMIL:", item.href, e);
                     }
                 }
             }
         }
 
-        // REPRODUCIR LA NARRACIÓN DE LA PÁGINA ACTUAL
         async function playCurrentPageNarrative() {
             const btn = document.getElementById("play-audio");
             const location = rendition.currentLocation();
 
-            if (!location || !location.start) {
-                alert("Cargando página...");
-                return;
-            }
+            if (!location || !location.start) return;
 
             const currentHref = location.start.href;
             const currentFileName = getFilename(currentHref);
-
-            // Buscar en el diccionario el audio indexado para esta página
             const audioPath = smilAudioMap[currentFileName];
 
             if (audioPath) {
                 try {
-                    // Obtener la URL del blob del audio desde la memoria del EPUB
                     const audioBlobUrl = await book.archive.url(audioPath);
                     audioPlayer.src = audioBlobUrl;
                     
@@ -383,10 +398,8 @@
                     };
                 } catch (err) {
                     console.error("Error reproduciendo el audio Blob:", err);
-                    alert("No se pudo cargar el archivo de audio.");
                 }
             } else {
-                // Si no hay SMIL, buscar etiqueta <audio> nativa dentro del HTML de la página
                 const contents = rendition.getContents()[0];
                 if (contents) {
                     const inlineAudios = contents.document.querySelectorAll("audio");
@@ -400,10 +413,9 @@
             }
         }
 
-        // Funciones auxiliares de rutas
         function resolvePath(base, relative) {
             const stack = base.split("/").filter(p => p.length > 0);
-            stack.pop(); // remover el archivo actual
+            stack.pop();
             const parts = relative.split("/");
             for (let part of parts) {
                 if (part === ".") continue;
@@ -418,7 +430,6 @@
             return path.split('/').pop().split('#')[0];
         }
 
-        // Navegación
         document.getElementById("next").onclick = () => rendition?.next();
         document.getElementById("prev").onclick = () => rendition?.prev();
         
