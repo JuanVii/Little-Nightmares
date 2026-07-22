@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lector EPUB 3.0 Interactivo</title>
     
-    <!-- Librerías JS necesarias -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.5/jszip.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
 
@@ -47,7 +46,6 @@
             transition: background 0.3s ease;
         }
 
-        /* --- Controls Bar --- */
         #controls {
             padding: 10px 20px;
             background-color: var(--bg-nav);
@@ -77,7 +75,6 @@
 
         .btn:hover, select:hover { background-color: var(--btn-hover); }
 
-        /* Botón Destacado de Audio */
         .btn-audio {
             background-color: var(--accent-purple);
             color: #ffffff;
@@ -86,7 +83,6 @@
         }
         .btn-audio:hover { opacity: 0.9; transform: scale(1.02); }
 
-        /* --- Main Layout --- */
         #main-container {
             flex: 1;
             display: flex;
@@ -119,7 +115,6 @@
         }
         #toc-list li:hover { background-color: var(--btn-bg); }
 
-        /* --- Viewer Area (Fix para el fondo blanco) --- */
         #viewer-area {
             flex: 1;
             display: flex;
@@ -136,7 +131,7 @@
             height: 100%;
             max-width: 900px;
             max-height: 90vh;
-            background: transparent !important; /* ELIMINA EL FONDO BLANCO DE LA CAJA */
+            background: transparent !important;
             border-radius: 12px;
             overflow: hidden;
             position: relative;
@@ -154,7 +149,6 @@
             background: transparent !important;
         }
 
-        /* Estilo forzado para el iframe que genera la librería */
         #viewer iframe {
             width: 100% !important;
             height: 100% !important;
@@ -182,7 +176,7 @@
     <nav id="controls">
         <div class="controls-group">
             <button id="toggle-sidebar" class="btn">☰ Índice</button>
-            <button id="play-audio" class="btn btn-audio">▶ Reproducir Audio</button>
+            <button id="play-audio" class="btn btn-audio">▶ Reproducir Narración</button>
         </div>
         
         <div class="controls-group">
@@ -211,10 +205,14 @@
         </main>
     </div>
 
+    <!-- Reproductor de Audio HTML5 global oculto -->
+    <audio id="global-audio-player"></audio>
+
     <script>
         let book, rendition;
-        let activeAudio = null;
-        
+        const audioPlayer = document.getElementById("global-audio-player");
+        let smilMap = {}; // Mapa para almacenar relaciones XHTML -> SMIL/Audio
+
         window.addEventListener('DOMContentLoaded', () => {
             loadBook("little.epub");
         });
@@ -244,32 +242,23 @@
                 sandbox: "allow-same-origin allow-scripts allow-popups allow-forms allow-downloads"
             });
 
-            // INYECCIÓN DE ESTILOS DENTRO DEL EPUB PARA CENTRADO Y ALTURA 100%
+            // Ajuste visual
             rendition.hooks.content.register(function(contents) {
                 contents.addStylesheetRules({
-                    "html": { 
-                        "height": "100% !important", 
-                        "width": "100% !important",
-                        "margin": "0 !important",
-                        "padding": "0 !important",
-                        "background": "transparent !important",
-                        "overflow": "hidden !important"
-                    },
-                    "body": { 
+                    "html, body": { 
                         "height": "100% !important", 
                         "width": "100% !important",
                         "margin": "0 !important", 
                         "padding": "0 !important",
+                        "background": "transparent !important",
                         "display": "flex !important",
                         "justify-content": "center !important",
                         "align-items": "center !important",
-                        "background": "transparent !important"
+                        "overflow": "hidden !important"
                     },
                     "img, svg": {
                         "max-width": "100% !important",
                         "max-height": "100% !important",
-                        "width": "100% !important",
-                        "height": "100% !important",
                         "object-fit": "contain !important"
                     }
                 });
@@ -281,45 +270,36 @@
                 rendition.resize();
             });
 
-            // LÓGICA REFORZADA PARA REPRODUCIR AUDIO / NARRACIÓN
+            // Cargar y mapear los manifiestos OPF y archivos SMIL cuando el libro se cargue
+            book.loaded.resources.then(() => {
+                parseSmilFiles();
+            });
+
+            // AL HACER CLIC EN "REPRODUCIR NARRACIÓN"
             document.getElementById("play-audio").onclick = () => {
                 const btn = document.getElementById("play-audio");
-                const contents = rendition.getContents()[0];
 
-                if (!contents) return;
-
-                // Buscar elementos de audio HTML5 dentro de la página cargada
-                const audioElements = contents.document.querySelectorAll("audio");
-
-                if (audioElements.length > 0) {
-                    const audio = audioElements[0];
-                    if (audio.paused) {
-                        audio.play().then(() => {
-                            btn.textContent = "⏸ Pausar Audio";
-                            activeAudio = audio;
-                        }).catch(e => console.log("Error al reproducir audio:", e));
-                    } else {
-                        audio.pause();
-                        btn.textContent = "▶ Reproducir Audio";
-                        activeAudio = null;
-                    }
-                } else {
-                    // Si el audio está configurado vía SMIL/Media Overlays en EPUB 3.0
-                    if (book.mediaOverlay) {
-                        book.mediaOverlay.toggle();
-                    } else {
-                        alert("Esta página no contiene un archivo de audio incrustado.");
-                    }
+                if (!audioPlayer.paused) {
+                    audioPlayer.pause();
+                    btn.textContent = "▶ Reproducir Narración";
+                    return;
                 }
+
+                // Obtener el capitulo o pagina actual
+                const currentLocation = rendition.currentLocation();
+                if (!currentLocation || !currentLocation.start) return;
+
+                const href = currentLocation.start.href.split('#')[0];
+                
+                // Buscar si la pagina tiene audio SMIL asociado o audio HTML5 interno
+                playPageAudio(href);
             };
 
-            // Detener el audio si se cambia de página
+            // Al cambiar de página, detener la reproducción anterior
             rendition.on("relocated", () => {
-                if (activeAudio) {
-                    activeAudio.pause();
-                    activeAudio = null;
-                }
-                document.getElementById("play-audio").textContent = "▶ Reproducir Audio";
+                audioPlayer.pause();
+                audioPlayer.src = "";
+                document.getElementById("play-audio").textContent = "▶ Reproducir Narración";
             });
 
             // Construcción del Índice
@@ -334,6 +314,98 @@
                     document.getElementById("toc-list").appendChild(li);
                 });
             });
+        }
+
+        // PARSEADOR PERSONALIZADO PARA EXTRAER AUDIO DE LOS ARCHIVOS .SMIL
+        async function parseSmilFiles() {
+            const manifest = book.packaging.manifest;
+            
+            for (let id in manifest) {
+                const item = manifest[id];
+                // Buscar elementos con media-overlay en la estructura
+                if (item.overlay) {
+                    const smilItem = manifest[item.overlay];
+                    if (smilItem) {
+                        try {
+                            const url = await book.archive.url(smilItem.href);
+                            const response = await fetch(url);
+                            const text = await response.text();
+                            
+                            // Parsear el XML del archivo .smil
+                            const parser = new DOMParser();
+                            const xmlDoc = parser.parseFromString(text, "text/xml");
+                            const audioNode = xmlDoc.querySelector("audio");
+
+                            if (audioNode) {
+                                let src = audioNode.getAttribute("src");
+                                // Resolver ruta relativa del audio
+                                const smilDir = smilItem.href.substring(0, smilItem.href.lastIndexOf("/") + 1);
+                                const fullAudioPath = smilDir + src;
+                                
+                                // Mapear XHTML -> Ruta del Audio
+                                smilMap[item.href] = fullAudioPath;
+                            }
+                        } catch (e) {
+                            console.error("Error leyendo SMIL:", e);
+                        }
+                    }
+                }
+            }
+        }
+
+        // REPRODUCIR EL AUDIO ENCONTRADO EN LA PÁGINA
+        async function playPageAudio(pageHref) {
+            const btn = document.getElementById("play-audio");
+
+            // 1. Verificar si tenemos una ruta mapeada desde los SMIL
+            let audioPath = smilMap[pageHref];
+
+            // Búsqueda alternativa por nombre si las rutas varían ligeramente
+            if (!audioPath) {
+                const cleanHref = pageHref.split('/').pop();
+                for (let key in smilMap) {
+                    if (key.includes(cleanHref)) {
+                        audioPath = smilMap[key];
+                        break;
+                    }
+                }
+            }
+
+            if (audioPath) {
+                try {
+                    // Obtener URL blob ejecutable desde el ZIP del EPUB
+                    const audioBlobUrl = await book.archive.url(audioPath);
+                    audioPlayer.src = audioBlobUrl;
+                    audioPlayer.play();
+                    btn.textContent = "⏸ Pausar Narración";
+
+                    audioPlayer.onended = () => {
+                        btn.textContent = "▶ Reproducir Narración";
+                    };
+                    return;
+                } catch(err) {
+                    console.error("Error al cargar el blob de audio:", err);
+                }
+            }
+
+            // 2. Fallback: Buscar etiquetas <audio> estándar dentro del HTML de la página
+            const contents = rendition.getContents()[0];
+            if (contents) {
+                const embeddedAudios = contents.document.querySelectorAll("audio");
+                if (embeddedAudios.length > 0) {
+                    const inlineAudio = embeddedAudios[0];
+                    if (inlineAudio.paused) {
+                        inlineAudio.play();
+                        btn.textContent = "⏸ Pausar Narración";
+                    } else {
+                        inlineAudio.pause();
+                        btn.textContent = "▶ Reproducir Narración";
+                    }
+                    return;
+                }
+            }
+
+            alert("No se encontró ningún archivo de audio o narración SMIL vinculado a esta página.");
         }
 
         // Navegación
