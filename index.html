@@ -205,13 +205,13 @@
         </main>
     </div>
 
-    <!-- Reproductor de Audio HTML5 global oculto -->
-    <audio id="global-audio-player"></audio>
+    <!-- Elemento de Audio Reproductor NATIVO -->
+    <audio id="smil-audio-player" style="display:none;"></audio>
 
     <script>
         let book, rendition;
-        const audioPlayer = document.getElementById("global-audio-player");
-        let smilMap = {}; // Mapa para almacenar relaciones XHTML -> SMIL/Audio
+        const audioPlayer = document.getElementById("smil-audio-player");
+        let smilAudioMap = {}; // Diccionario para guardar [página XHTML] -> [Ruta Audio]
 
         window.addEventListener('DOMContentLoaded', () => {
             loadBook("little.epub");
@@ -242,7 +242,7 @@
                 sandbox: "allow-same-origin allow-scripts allow-popups allow-forms allow-downloads"
             });
 
-            // Ajuste visual
+            // Ajuste estético de centrado
             rendition.hooks.content.register(function(contents) {
                 contents.addStylesheetRules({
                     "html, body": { 
@@ -270,12 +270,12 @@
                 rendition.resize();
             });
 
-            // Cargar y mapear los manifiestos OPF y archivos SMIL cuando el libro se cargue
-            book.loaded.resources.then(() => {
-                parseSmilFiles();
+            // Mapeo exhaustivo de archivos SMIL y manifiesto
+            book.ready.then(() => {
+                indexSmilFiles();
             });
 
-            // AL HACER CLIC EN "REPRODUCIR NARRACIÓN"
+            // CONTROL DE REPRODUCCIÓN AL HACER CLICK EN EL BOTÓN
             document.getElementById("play-audio").onclick = () => {
                 const btn = document.getElementById("play-audio");
 
@@ -285,20 +285,13 @@
                     return;
                 }
 
-                // Obtener el capitulo o pagina actual
-                const currentLocation = rendition.currentLocation();
-                if (!currentLocation || !currentLocation.start) return;
-
-                const href = currentLocation.start.href.split('#')[0];
-                
-                // Buscar si la pagina tiene audio SMIL asociado o audio HTML5 interno
-                playPageAudio(href);
+                playCurrentPageNarrative();
             };
 
-            // Al cambiar de página, detener la reproducción anterior
+            // Al cambiar de página
             rendition.on("relocated", () => {
                 audioPlayer.pause();
-                audioPlayer.src = "";
+                audioPlayer.currentTime = 0;
                 document.getElementById("play-audio").textContent = "▶ Reproducir Narración";
             });
 
@@ -316,96 +309,113 @@
             });
         }
 
-        // PARSEADOR PERSONALIZADO PARA EXTRAER AUDIO DE LOS ARCHIVOS .SMIL
-        async function parseSmilFiles() {
+        // FUNCIÓN CLAVE: INDEXAR LOS ARCHIVOS .SMIL
+        async function indexSmilFiles() {
+            smilAudioMap = {};
             const manifest = book.packaging.manifest;
             
-            for (let id in manifest) {
-                const item = manifest[id];
-                // Buscar elementos con media-overlay en la estructura
-                if (item.overlay) {
-                    const smilItem = manifest[item.overlay];
-                    if (smilItem) {
-                        try {
-                            const url = await book.archive.url(smilItem.href);
-                            const response = await fetch(url);
-                            const text = await response.text();
-                            
-                            // Parsear el XML del archivo .smil
-                            const parser = new DOMParser();
-                            const xmlDoc = parser.parseFromString(text, "text/xml");
-                            const audioNode = xmlDoc.querySelector("audio");
+            for (let key in manifest) {
+                const item = manifest[key];
+                
+                // Si el item del manifiesto es de tipo SMIL o termina en .smil
+                if (item.type === "application/smil+xml" || (item.href && item.href.endsWith(".smil"))) {
+                    try {
+                        const url = await book.archive.url(item.href);
+                        const response = await fetch(url);
+                        const xmlText = await response.text();
+                        
+                        const parser = new DOMParser();
+                        const xmlDoc = parser.parseFromString(xmlText, "application/xml");
+                        
+                        // Buscar nodos de texto y de audio
+                        const textNodes = xmlDoc.querySelectorAll("text");
+                        const audioNodes = xmlDoc.querySelectorAll("audio");
 
-                            if (audioNode) {
-                                let src = audioNode.getAttribute("src");
-                                // Resolver ruta relativa del audio
-                                const smilDir = smilItem.href.substring(0, smilItem.href.lastIndexOf("/") + 1);
-                                const fullAudioPath = smilDir + src;
-                                
-                                // Mapear XHTML -> Ruta del Audio
-                                smilMap[item.href] = fullAudioPath;
-                            }
-                        } catch (e) {
-                            console.error("Error leyendo SMIL:", e);
+                        if (textNodes.length > 0 && audioNodes.length > 0) {
+                            // Extraer ruta de la página XHTML asociada
+                            let xhtmlSrc = textNodes[0].getAttribute("src").split("#")[0];
+                            // Extraer ruta del archivo de audio asociado
+                            let audioSrc = audioNodes[0].getAttribute("src");
+
+                            // Normalizar rutas relativas
+                            const smilDir = item.href.substring(0, item.href.lastIndexOf("/") + 1);
+                            
+                            const fullXhtml = resolvePath(smilDir, xhtmlSrc);
+                            const fullAudio = resolvePath(smilDir, audioSrc);
+
+                            // Guardar en nuestro mapa
+                            smilAudioMap[getFilename(fullXhtml)] = fullAudio;
                         }
+                    } catch (e) {
+                        console.error("Error al procesar archivo SMIL:", item.href, e);
                     }
                 }
             }
         }
 
-        // REPRODUCIR EL AUDIO ENCONTRADO EN LA PÁGINA
-        async function playPageAudio(pageHref) {
+        // REPRODUCIR LA NARRACIÓN DE LA PÁGINA ACTUAL
+        async function playCurrentPageNarrative() {
             const btn = document.getElementById("play-audio");
+            const location = rendition.currentLocation();
 
-            // 1. Verificar si tenemos una ruta mapeada desde los SMIL
-            let audioPath = smilMap[pageHref];
-
-            // Búsqueda alternativa por nombre si las rutas varían ligeramente
-            if (!audioPath) {
-                const cleanHref = pageHref.split('/').pop();
-                for (let key in smilMap) {
-                    if (key.includes(cleanHref)) {
-                        audioPath = smilMap[key];
-                        break;
-                    }
-                }
+            if (!location || !location.start) {
+                alert("Cargando página...");
+                return;
             }
+
+            const currentHref = location.start.href;
+            const currentFileName = getFilename(currentHref);
+
+            // Buscar en el diccionario el audio indexado para esta página
+            const audioPath = smilAudioMap[currentFileName];
 
             if (audioPath) {
                 try {
-                    // Obtener URL blob ejecutable desde el ZIP del EPUB
+                    // Obtener la URL del blob del audio desde la memoria del EPUB
                     const audioBlobUrl = await book.archive.url(audioPath);
                     audioPlayer.src = audioBlobUrl;
-                    audioPlayer.play();
+                    
+                    await audioPlayer.play();
                     btn.textContent = "⏸ Pausar Narración";
 
                     audioPlayer.onended = () => {
                         btn.textContent = "▶ Reproducir Narración";
                     };
-                    return;
-                } catch(err) {
-                    console.error("Error al cargar el blob de audio:", err);
+                } catch (err) {
+                    console.error("Error reproduciendo el audio Blob:", err);
+                    alert("No se pudo cargar el archivo de audio.");
                 }
-            }
-
-            // 2. Fallback: Buscar etiquetas <audio> estándar dentro del HTML de la página
-            const contents = rendition.getContents()[0];
-            if (contents) {
-                const embeddedAudios = contents.document.querySelectorAll("audio");
-                if (embeddedAudios.length > 0) {
-                    const inlineAudio = embeddedAudios[0];
-                    if (inlineAudio.paused) {
-                        inlineAudio.play();
+            } else {
+                // Si no hay SMIL, buscar etiqueta <audio> nativa dentro del HTML de la página
+                const contents = rendition.getContents()[0];
+                if (contents) {
+                    const inlineAudios = contents.document.querySelectorAll("audio");
+                    if (inlineAudios.length > 0) {
+                        inlineAudios[0].play();
                         btn.textContent = "⏸ Pausar Narración";
-                    } else {
-                        inlineAudio.pause();
-                        btn.textContent = "▶ Reproducir Narración";
+                        return;
                     }
-                    return;
                 }
+                alert("No hay un archivo de narración o audio SMIL configurado para esta página.");
             }
+        }
 
-            alert("No se encontró ningún archivo de audio o narración SMIL vinculado a esta página.");
+        // Funciones auxiliares de rutas
+        function resolvePath(base, relative) {
+            const stack = base.split("/").filter(p => p.length > 0);
+            stack.pop(); // remover el archivo actual
+            const parts = relative.split("/");
+            for (let part of parts) {
+                if (part === ".") continue;
+                if (part === "..") stack.pop();
+                else stack.push(part);
+            }
+            return stack.join("/");
+        }
+
+        function getFilename(path) {
+            if (!path) return "";
+            return path.split('/').pop().split('#')[0];
         }
 
         // Navegación
