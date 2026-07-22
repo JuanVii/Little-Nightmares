@@ -115,13 +115,13 @@
         }
         #toc-list li:hover { background-color: var(--btn-bg); }
 
-        /* Visor y centrado de bordes */
+        /* VISOR Y ENCUADRE RIGUROSO */
         #viewer-area {
             flex: 1;
             display: flex;
             justify-content: center;
             align-items: center;
-            padding: 20px;
+            padding: 15px;
             background-color: var(--bg-body);
             width: 100%;
             height: 100%;
@@ -131,11 +131,9 @@
         #book-wrapper {
             width: 100%;
             height: 100%;
-            max-width: 900px;
-            max-height: 85vh;
+            max-width: 1000px;
+            max-height: 90vh;
             background: transparent !important;
-            border-radius: 12px;
-            overflow: hidden;
             position: relative;
             display: flex;
             justify-content: center;
@@ -152,12 +150,10 @@
         }
 
         #viewer iframe {
-            width: 100% !important;
-            height: 100% !important;
             border: none !important;
             background: transparent !important;
-            box-shadow: 0 8px 25px rgba(0,0,0,0.3);
-            border-radius: 8px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+            border-radius: 6px;
         }
 
         #loading-overlay {
@@ -184,9 +180,8 @@
         <div class="controls-group">
             <button id="theme-toggle" class="btn" data-speech="Cambiar modo claro u oscuro">🌓 Modo</button>
             <select id="view-mode" data-speech="Modo de vista de páginas">
+                <option value="none">1 Página</option>
                 <option value="auto">Vista: Auto</option>
-                <option value="single">1 Página</option>
-                <option value="none">2 Páginas</option>
             </select>
             <button id="prev" class="btn" data-speech="Página anterior">❮ Anterior</button>
             <button id="next" class="btn" data-speech="Página siguiente">Siguiente ❯</button>
@@ -216,10 +211,10 @@
 
         window.addEventListener('DOMContentLoaded', () => {
             loadBook("little.epub");
-            enableHoverTTS(); // Activar síntesis de voz en los botones superiores
+            enableHoverTTS();
         });
 
-        // FUNCIONALIDAD ACCESIBILIDAD: Lectura en hover de botones superiores
+        // NARRACIÓN EN HOVER PARA BOTONES (ACCESIBILIDAD)
         function enableHoverTTS() {
             if (!('speechSynthesis' in window)) return;
 
@@ -227,8 +222,7 @@
 
             elementsToRead.forEach(el => {
                 el.addEventListener('mouseenter', () => {
-                    window.speechSynthesis.cancel(); // Cancelar lecturas previas
-                    
+                    window.speechSynthesis.cancel();
                     let textToRead = el.getAttribute('data-speech') || el.innerText || el.options?.[el.selectedIndex]?.text;
                     if (textToRead) {
                         const utterance = new SpeechSynthesisUtterance(textToRead);
@@ -256,42 +250,41 @@
             
             book = ePub(fileUrl);
             
+            // CONFIGURACIÓN AJUSTADA PARA FIXED LAYOUT
             rendition = book.renderTo("viewer", {
                 width: "100%",
                 height: "100%",
-                flow: "paginated",
-                manager: "default",
+                spread: "none", // Desactiva la vista doble forzada que rompe lienzos fijos
+                flow: "scaffold", // Mantiene el marco estático
                 allowScriptedContent: true,
                 sandbox: "allow-same-origin allow-scripts allow-popups allow-forms allow-downloads"
             });
 
-            // CENTRADO MÁXIMO Y RESPETO DE BORDES INTERNOS DEL EPUB
+            // REGLAS CSS INYECTADAS AL IFRAME PARA ELIMINAR CORTE DE PÁGINA
             rendition.hooks.content.register(function(contents) {
                 contents.addStylesheetRules({
                     "html": { 
-                        "height": "100% !important", 
                         "width": "100% !important",
+                        "height": "100% !important",
                         "margin": "0 !important", 
                         "padding": "0 !important",
-                        "overflow": "hidden !important",
-                        "background": "transparent !important"
+                        "overflow": "hidden !important"
                     },
                     "body": { 
-                        "height": "100% !important", 
-                        "width": "100% !important",
+                        "width": "100% !important", 
+                        "height": "100% !important",
                         "margin": "0 auto !important", 
                         "padding": "0 !important",
-                        "background": "transparent !important",
+                        "overflow": "hidden !important",
                         "display": "flex !important",
                         "justify-content": "center !important",
                         "align-items": "center !important",
-                        "overflow": "hidden !important",
-                        "box-sizing": "border-box !important"
+                        "-webkit-column-width": "auto !important",
+                        "column-width": "auto !important"
                     },
-                    "img, svg, video, div": {
+                    "svg, img, div": {
                         "max-width": "100% !important",
                         "max-height": "100% !important",
-                        "object-fit": "contain !important",
                         "box-sizing": "border-box !important"
                     }
                 });
@@ -300,7 +293,7 @@
             rendition.display().then(() => {
                 const loading = document.getElementById("loading-overlay");
                 if (loading) loading.style.display = "none";
-                rendition.resize();
+                setTimeout(() => rendition.resize(), 100);
             });
 
             book.ready.then(() => {
@@ -338,6 +331,7 @@
             });
         }
 
+        // PARSER Y MAPEO RIGUROSO DE SMIL
         async function indexSmilFiles() {
             smilAudioMap = {};
             const manifest = book.packaging.manifest;
@@ -345,10 +339,10 @@
             for (let key in manifest) {
                 const item = manifest[key];
                 
-                if (item.type === "application/smil+xml" || (item.href && item.href.endsWith(".smil"))) {
+                if (item.type === "application/smil+xml" || (item.href && item.href.toLowerCase().endsWith(".smil"))) {
                     try {
-                        const url = await book.archive.url(item.href);
-                        const response = await fetch(url);
+                        const smilUrl = await book.archive.url(item.href);
+                        const response = await fetch(smilUrl);
                         const xmlText = await response.text();
                         
                         const parser = new DOMParser();
@@ -361,7 +355,7 @@
                             let xhtmlSrc = textNodes[0].getAttribute("src").split("#")[0];
                             let audioSrc = audioNodes[0].getAttribute("src");
 
-                            const smilDir = item.href.substring(0, item.href.lastIndexOf("/") + 1);
+                            const smilDir = item.href.includes("/") ? item.href.substring(0, item.href.lastIndexOf("/") + 1) : "";
                             
                             const fullXhtml = resolvePath(smilDir, xhtmlSrc);
                             const fullAudio = resolvePath(smilDir, audioSrc);
@@ -369,12 +363,13 @@
                             smilAudioMap[getFilename(fullXhtml)] = fullAudio;
                         }
                     } catch (e) {
-                        console.error("Error al procesar SMIL:", item.href, e);
+                        console.error("Error indexando SMIL:", item.href, e);
                     }
                 }
             }
         }
 
+        // EXTRACCIÓN Y REPRODUCCIÓN DEL BLOB DE AUDIO
         async function playCurrentPageNarrative() {
             const btn = document.getElementById("play-audio");
             const location = rendition.currentLocation();
@@ -387,35 +382,47 @@
 
             if (audioPath) {
                 try {
-                    const audioBlobUrl = await book.archive.url(audioPath);
-                    audioPlayer.src = audioBlobUrl;
+                    const audioUrl = await book.archive.url(audioPath);
+                    audioPlayer.src = audioUrl;
+                    audioPlayer.load();
                     
-                    await audioPlayer.play();
-                    btn.textContent = "⏸ Pausar Narración";
+                    let promise = audioPlayer.play();
+                    if (promise !== undefined) {
+                        promise.then(() => {
+                            btn.textContent = "⏸ Pausar Narración";
+                        }).catch(e => console.error("Bloqueo de autoplay:", e));
+                    }
 
                     audioPlayer.onended = () => {
                         btn.textContent = "▶ Reproducir Narración";
                     };
                 } catch (err) {
-                    console.error("Error reproduciendo el audio Blob:", err);
+                    console.error("Error al extraer audio:", err);
                 }
             } else {
+                // Alternativa: audio incrustado directo
                 const contents = rendition.getContents()[0];
-                if (contents) {
-                    const inlineAudios = contents.document.querySelectorAll("audio");
-                    if (inlineAudios.length > 0) {
-                        inlineAudios[0].play();
-                        btn.textContent = "⏸ Pausar Narración";
+                if (contents && contents.document) {
+                    const inlineAudio = contents.document.querySelector("audio");
+                    if (inlineAudio) {
+                        if (inlineAudio.paused) {
+                            inlineAudio.play();
+                            btn.textContent = "⏸ Pausar Narración";
+                            inlineAudio.onended = () => { btn.textContent = "▶ Reproducir Narración"; };
+                        } else {
+                            inlineAudio.pause();
+                            btn.textContent = "▶ Reproducir Narración";
+                        }
                         return;
                     }
                 }
-                alert("No hay un archivo de narración o audio SMIL configurado para esta página.");
+                alert("Esta página no contiene un archivo de narración SMIL vinculado.");
             }
         }
 
         function resolvePath(base, relative) {
+            if (!base) return relative;
             const stack = base.split("/").filter(p => p.length > 0);
-            stack.pop();
             const parts = relative.split("/");
             for (let part of parts) {
                 if (part === ".") continue;
